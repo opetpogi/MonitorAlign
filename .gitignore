@@ -1,0 +1,3 @@
+# Build outputs (rebuild with build.bat / demo\make-demo.bat; the zip and video go in GitHub Releases)
+*.exe
+dist/
