@@ -2,8 +2,6 @@
 
 A small Windows tray app for monitors of different physical sizes. It makes the mouse cross between them at the same physical height, and can span a wallpaper so the picture lines up across them too.
 
-![Demo](docs/demo.gif)
-
 Windows lines monitors up by pixels. With a 27" and a 23" monitor that are both 1920×1080, a pixel row on the 27" sits at a different height than the same row on the 23". So the pointer jumps up or down when it crosses, and a spanned wallpaper doesn't line up. MonitorAlign converts positions to millimetres instead.
 
 ## Features
