@@ -35,7 +35,11 @@ build.bat
 ```
 
 This uses the C# compiler that ships with Windows (`%WINDIR%\Microsoft.NET\Framework64\v4.0.30319\csc.exe`).
-The installer scripts are in `package/`. `demo\make-demo.bat` renders the demo video and needs `ffmpeg` on PATH.
+The installer scripts are in `package/`. `package\msix\build-msix.ps1` builds the Microsoft Store package (see `package\msix\README.md`). `demo\make-demo.bat` renders the demo video and needs `ffmpeg` on PATH.
+
+## Support
+
+MonitorAlign is free and open source. If it saved you some annoyance, you can buy me a coffee at [ko-fi.com/opetpogi](https://ko-fi.com/opetpogi). There's also a **Support MonitorAlign** item in the tray menu.
 
 ## How it works
 

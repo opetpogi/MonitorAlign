@@ -42,6 +42,21 @@ namespace MonitorAlign
         [DllImport("user32.dll")] public static extern bool UnhookWindowsHookEx(IntPtr h);
         [DllImport("user32.dll")] public static extern IntPtr CallNextHookEx(IntPtr h, int n, IntPtr w, IntPtr l);
         [DllImport("kernel32.dll")] public static extern IntPtr GetModuleHandle(string n);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] static extern int GetCurrentPackageFamilyName(ref int len, System.Text.StringBuilder name);
+
+        // The MSIX package family name when installed from the Microsoft Store, else null.
+        public static readonly string PackageFamily = GetPackageFamily();
+        static string GetPackageFamily()
+        {
+            try
+            {
+                int len = 0;
+                if (GetCurrentPackageFamilyName(ref len, null) == 15700) return null; // APPMODEL_ERROR_NO_PACKAGE
+                var sb = new System.Text.StringBuilder(len);
+                return GetCurrentPackageFamilyName(ref len, sb) == 0 ? sb.ToString() : null;
+            }
+            catch (EntryPointNotFoundException) { return null; }
+        }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         public struct DISPLAY_DEVICE
@@ -144,6 +159,8 @@ namespace MonitorAlign
             File.WriteAllLines(FilePath, lines);
         }
 
+        // The Store (MSIX) version starts through the startup task in its manifest instead; its registry
+        // writes are virtualized, so the Run key wouldn't work there.
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
         public static bool StartWithWindows
         {
@@ -239,7 +256,22 @@ namespace MonitorAlign
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         static extern bool SystemParametersInfo(int action, int param, string value, int flags);
 
-        public static readonly string OutPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MonitorAlign", "wallpaper.jpg");
+        // In the Store version AppData is redirected into the package, where Explorer can't see it,
+        // so the wallpaper goes straight to the real location of that redirected folder.
+        public static readonly string OutPath = Native.PackageFamily == null
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "MonitorAlign", "wallpaper.jpg")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                           "Packages", Native.PackageFamily, "LocalCache", "Roaming", "MonitorAlign", "wallpaper.jpg");
+
+        [ComImport, Guid("B92B56A9-8B55-4E14-9A89-0199BBB6F93B"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IDesktopWallpaper
+        {
+            void SetWallpaper([MarshalAs(UnmanagedType.LPWStr)] string monitorId, [MarshalAs(UnmanagedType.LPWStr)] string wallpaper);
+            void GetWallpaper(); void GetMonitorDevicePathAt(); void GetMonitorDevicePathCount(); void GetMonitorRECT();
+            void SetBackgroundColor(); void GetBackgroundColor();
+            void SetPosition(int position);
+        }
+        [ComImport, Guid("C2CF3110-460E-4fc1-B9D0-8A1C0C9CC4BD")] class DesktopWallpaper { }
         static string lastSig;
         public static void MarkCurrent() { lastSig = Signature(); }
 
@@ -254,13 +286,25 @@ namespace MonitorAlign
             if (string.IsNullOrEmpty(Config.Wallpaper) || !File.Exists(Config.Wallpaper)) return;
             var sig = Signature();
             if (!force && sig == lastSig) return;
+            Directory.CreateDirectory(Path.GetDirectoryName(OutPath));
             Render(Config.Wallpaper, OutPath);
-            using (var k = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop", true))
+            if (Native.PackageFamily != null)
             {
-                k.SetValue("WallpaperStyle", "22"); // Span
-                k.SetValue("TileWallpaper", "0");
+                // Registry writes are virtualized in the package; Explorer sets these for us instead.
+                var dw = (IDesktopWallpaper)new DesktopWallpaper();
+                dw.SetPosition(5); // DWPOS_SPAN
+                dw.SetWallpaper(null, OutPath);
+                Marshal.ReleaseComObject(dw);
             }
-            SystemParametersInfo(20, 0, OutPath, 3); // SPI_SETDESKWALLPAPER, update ini + broadcast
+            else
+            {
+                using (var k = Registry.CurrentUser.OpenSubKey(@"Control Panel\Desktop", true))
+                {
+                    k.SetValue("WallpaperStyle", "22"); // Span
+                    k.SetValue("TileWallpaper", "0");
+                }
+                SystemParametersInfo(20, 0, OutPath, 3); // SPI_SETDESKWALLPAPER, update ini + broadcast
+            }
             lastSig = sig;
         }
 
@@ -461,8 +505,19 @@ namespace MonitorAlign
             gd.CheckedChanged += (s, e) => { Config.Guides = gd.Checked; OnChanged(); };
             var bl = new CheckBox { Text = "Stop the mouse where the screens don't physically overlap", Checked = Config.Block, AutoSize = true };
             bl.CheckedChanged += (s, e) => { Config.Block = bl.Checked; OnChanged(); };
-            var st = new CheckBox { Text = "Start with Windows", Checked = Config.StartWithWindows, AutoSize = true };
-            st.CheckedChanged += (s, e) => { Config.StartWithWindows = st.Checked; };
+            Control st;
+            if (Native.PackageFamily == null)
+            {
+                var cb = new CheckBox { Text = "Start with Windows", Checked = Config.StartWithWindows, AutoSize = true };
+                cb.CheckedChanged += (s, e) => { Config.StartWithWindows = cb.Checked; };
+                st = cb;
+            }
+            else
+            {
+                var link = new LinkLabel { Text = "Start with Windows…", AutoSize = true, Margin = new Padding(3, 7, 12, 0) };
+                link.LinkClicked += (s, e) => App.Open("ms-settings:startupapps");
+                st = link;
+            }
             var reset = new Button { Text = "Reset positions", AutoSize = true };
             reset.Click += (s, e) => { Config.ResetPositions(); OnChanged(); };
             var wp = new Button { Text = "Aligned wallpaper…", AutoSize = true };
@@ -526,6 +581,7 @@ namespace MonitorAlign
             menu.Items.Add(enabledItem);
             menu.Items.Add(guidesItem);
             menu.Items.Add(new ToolStripSeparator());
+            menu.Items.Add("Support MonitorAlign ♥", null, (s, e) => Open(DonateUrl));
             menu.Items.Add("Exit", null, (s, e) => ExitThread());
             menu.Opening += (s, e) => { enabledItem.Checked = Config.Enabled; guidesItem.Checked = Config.Guides; };
             tray.ContextMenuStrip = menu;
@@ -579,6 +635,13 @@ namespace MonitorAlign
             SystemEvents.DisplaySettingsChanged -= OnDisplayChanged;
             tray.Visible = false;
             base.ExitThreadCore();
+        }
+
+        public const string DonateUrl = "https://ko-fi.com/opetpogi";
+
+        public static void Open(string url)
+        {
+            try { System.Diagnostics.Process.Start(url); } catch { }
         }
 
         public static Icon MakeIcon()
